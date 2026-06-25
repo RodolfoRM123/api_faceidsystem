@@ -27,10 +27,10 @@ class FaceEngine:
             self.model.prepare(ctx_id=settings.CTX_ID, det_thresh=settings.DETECTION_THRESHOLD)
             logger.info("Model loaded successfully.")
 
-    def process_image(self, image_bytes: bytes) -> List[any]:
+    def process_image(self, image_bytes: bytes) -> Tuple[List[any], np.ndarray]:
         """
         Decodes image and detects faces.
-        Returns a list of InsightFace Face objects.
+        Returns a tuple (faces, image_array).
         """
         if not self.model:
             self.initialize()
@@ -44,57 +44,64 @@ class FaceEngine:
 
         # Get faces
         faces = self.model.get(img)
-        return faces, img.shape
+        return faces, img
 
-    def check_liveness(self, face, image_shape) -> Tuple[bool, str]:
-        """
-        Basic Liveness & Quality Check heuristics for single-image.
-        Real liveness (blink) requires video.
-        Here we check:
-        1. Detection Score (already filtered by det_thresh, but we can be stricter)
-        2. Face Size (too small = suspicious or bad quality)
-        3. Simple Pose (looking straight)
-        4. (Optional) Laplacian Variance for blur (screen replay often blurs or moire)
-        """
-        # 1. Score
-        if face.det_score < 0.60:
-            return False, "Low detection confidence"
 
-        # 2. Size relative to image
-        h, w, _ = image_shape
+    def check_liveness(self, face, image) -> Tuple[bool, str]:
+        """
+        Improved Liveness & Quality Check.
+        """
+        # 1. Detection Confidence Score
+        if face.det_score < 0.70: 
+            return False, "Confianza de detección baja"
+
+        # 2. Face Size relative to image
+        h, w, _ = image.shape
         bbox = face.bbox
         face_h = bbox[3] - bbox[1]
         face_w = bbox[2] - bbox[0]
         
-        if face_h < h * 0.1 or face_w < w * 0.1:
-            return False, "Face too small"
+        if face_h < h * 0.15 or face_w < w * 0.15:
+            return False, "Rostro demasiado pequeño, acércate más"
 
-        # 3. Pose (Pitch, Yaw, Roll)
-        # InsightFace returns pose as roughly [pitch, yaw, roll] in degrees (depending on version)
-        # or simplified. We check common keys if available, else skip.
-        if hasattr(face, 'pose') and face.pose is not None:
-             # This depends on specific model, usually output is existing.
-             # We skipped strict pose check implementation to avoid crashes if model doesn't output it by default
-             # but buffalo_l usually does.
-             pass
+        # 3. Blur Detection (Laplacian Variance) - Very permissive
+        x1, y1, x2, y2 = map(int, bbox)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        face_crop = image[y1:y2, x1:x2]
+        
+        if face_crop.size > 0:
+            gray_face = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+            blur_score = cv2.Laplacian(gray_face, cv2.CV_64F).var()
+            
+            # Reduced to 5 - basically only fails if completely gray/out of focus
+            if blur_score < 5: 
+                return False, f"Imagen demasiado borrosa (puntaje: {int(blur_score)})"
+
+            # 4. Brightness Check - Very permissive
+            avg_brightness = np.mean(gray_face)
+            if avg_brightness < 15: # Almost pitch black
+                return False, "Imagen demasiado oscura"
+            if avg_brightness > 250: # Pure white
+                return False, "Demasiada luz"
 
         return True, "Passed"
 
+
     def get_embedding(self, face) -> np.ndarray:
-        return face.embedding
+        # Normalizing at source to ensure consistent comparisons
+        embedding = face.embedding
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+        return embedding
 
     def compute_similarity(self, embed1: np.ndarray, embed2: np.ndarray) -> float:
         """
-        Cosine Similarity: (A . B) / (||A|| * ||B||)
-        InsightFace embeddings are often normalized, but we ensure it.
+        Cosine Similarity. 
+        Assumes normalized embeddings from get_embedding.
         """
-        # Normalization
-        norm1 = np.linalg.norm(embed1)
-        norm2 = np.linalg.norm(embed2)
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-            
-        return np.dot(embed1, embed2) / (norm1 * norm2)
+        return np.dot(embed1, embed2)
+
 
 face_engine = FaceEngine()

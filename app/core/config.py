@@ -8,8 +8,9 @@ class Settings(BaseSettings):
     # Biometrics Model Settings
     INSIGHTFACE_MODEL_NAME: str = "buffalo_l"  # 'buffalo_l' is accurate, 'buffalo_s' is fast
     CTX_ID: int = 0  # 0 for GPU, -1 for CPU. Using -1 for safety unless CUDA is known.
-    DETECTION_THRESHOLD: float = 0.5
-    SIMILARITY_THRESHOLD: float = 0.45  # Tuned for Cosine Similarity (roughly 0.4-0.6 range)
+    DETECTION_THRESHOLD: float = 0.4
+    SIMILARITY_THRESHOLD: float = 0.40  # More permissive for slightly difficult matches
+
     
     # Database
     DATABASE_URL: str = "sqlite:///./faceid.db"
